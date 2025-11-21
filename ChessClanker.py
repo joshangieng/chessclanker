@@ -88,6 +88,7 @@ def find_pieces(piece_path, white: bool):
             coord = (letter, number)
             coords.append(coord)
     
+    print(coords)
     return coords
 
 def make_fen():
@@ -157,13 +158,15 @@ set_depth = int(input("Please enter stockfish depth from 1-17: "))
 while set_depth > 17 or set_depth < 1:
     set_depth = int(input("Please enter stockfish depth from 1-17: "))
 
+thinking_time = int(input("Please enter min thinking time (ms): "))
+
 speed = int(input("Please enter speed from 1-100: "))
 while speed > 100 or speed < 1:
     speed = int(input("Please enter speed from 1-100: "))
 
 print("\nWaiting for game start...")
 
-stockfish = Stockfish(path = project_dir / "stockfish" / "stockfish-windows-x86-64-avx2.exe", depth=set_depth, parameters={"Threads": 3, "Minimum Thinking Time": 0.01})
+stockfish = Stockfish(path = project_dir / "stockfish" / "stockfish-windows-x86-64-avx2.exe", depth=set_depth, parameters={"Threads": 3, "Minimum Thinking Time": thinking_time})
 
 game_end = cv.imread(project_dir / "assets" / "game_end.png", cv.COLOR_RGBA2RGB)
 game_aborted = cv.imread(project_dir / "assets" / "game_aborted.png", cv.COLOR_RGBA2RGB)
@@ -184,7 +187,7 @@ piece_paths = [
     project_dir / "assets" / "whiterook.png"
     ]
 
-#works on 1600x900 - to change for different resolutions find the pixel of top left of chessboard
+#works on 1920x1080 - to change for different resolutions find the pixel of top left of chessboard
 x1 = 231
 y1 = 104
 x2 = 828
@@ -202,10 +205,10 @@ is_white = None
 while True:
     screenshot = get_screenshot(x1, y1, w, h)
 
-    # cv.imshow("screen", screenshot)
-    # if cv.waitKey(1) == ord("q"):
-    #     cv.destroyAllWindows()
-    #     break
+    cv.imshow("screen", screenshot)
+    if cv.waitKey(1) == ord("q"):
+        cv.destroyAllWindows()
+        break
     
     gameendcomp = cv.matchTemplate(game_end, screenshot, cv.TM_CCOEFF_NORMED)
     min_val, max_val, min_loc, max_loc = cv.minMaxLoc(gameendcomp)
@@ -234,6 +237,8 @@ while True:
     if is_white is None:
         continue
     
+    ################################ if in game 
+
     piece_locations = []
 
     if tuple(screenshot[h-t, w-t]) != my_timer_colour:
@@ -294,6 +299,5 @@ while True:
             #make move on stockfish
             stockfish.make_moves_from_current_position([move_to_make])
             print("Position after my move", move_to_make, stockfish.get_board_visual())
-
 
         toggle = True
