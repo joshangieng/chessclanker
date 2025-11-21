@@ -184,7 +184,7 @@ piece_paths = [
     project_dir / "assets" / "whiterook.png"
     ]
 
-#works on 1920x1080 - to change for different resolutions find the pixel of top left of chessboard
+#works on 1600x900 - to change for different resolutions find the pixel of top left of chessboard
 x1 = 231
 y1 = 104
 x2 = 828
@@ -294,5 +294,6 @@ while True:
             #make move on stockfish
             stockfish.make_moves_from_current_position([move_to_make])
             print("Position after my move", move_to_make, stockfish.get_board_visual())
+
 
         toggle = True
