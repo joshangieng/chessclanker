@@ -5,9 +5,30 @@ from PIL import ImageGrab
 import time
 import win32ui, win32gui, win32con, win32api
 from stockfish import Stockfish
+from stockfish import models
 import random
 import sys
 from pathlib import Path
+
+def is_fen_valid(fen: str) -> bool:
+    temp_sf = Stockfish(path = project_dir / "stockfish" / "stockfish-windows-x86-64-avx2.exe", parameters={"Hash": 1})
+    # Using a new temporary SF instance, in case the fen is an illegal position that causes
+    # the SF process to crash.
+    best_move = None
+    temp_sf.set_fen_position(fen, False)
+    try:
+        best_move = temp_sf.get_best_move()
+    except models.StockfishException:
+        # If a StockfishException is thrown, then it happened in read_line() since the SF process crashed.
+        # This is likely due to the position being illegal, so set the var to false:
+        return False
+    else:
+        return best_move is not None
+    finally:
+        temp_sf.__del__()
+        # Calling this function before returning from either the except or else block above.
+        # The __del__ function should generally be called implicitly by python when this
+        # temp_sf object goes out of scope, but calling it explicitly guarantees this will happen.
 
 def get_screenshot(x1, y1, w, h, windowname = None):
     '''
@@ -88,7 +109,6 @@ def find_pieces(piece_path, white: bool):
             coord = (letter, number)
             coords.append(coord)
     
-    print(coords)
     return coords
 
 def make_fen():
@@ -141,6 +161,86 @@ def make_fen():
     fen = '/'.join(''.join(str(x) for x in row) for row in fen_list_edited)
     return fen
 
+def set_pause(turn, speed):
+    if tuple(screenshot[h-t, w-t]) == red:
+        print("red alert!")
+        pg.PAUSE = 0.001
+    elif tuple(screenshot[h-t, w-t]) == my_timer_colour:
+        print("slow and steady...")
+        rand = random.random()
+        rand2 = random.random()
+        
+        if stockfish.will_move_be_a_capture(move_to_make) == Stockfish.Capture.DIRECT_CAPTURE:
+            pg.PAUSE = rand/(speed/2)
+            print("capture")
+        elif 0 <= turn <= 8:
+            print("in opening, move faster - turn:", turn)
+            pg.PAUSE = (rand/(speed/(turn+1)))/4
+        elif 25 <= turn <= 40:
+            print("middleish game speed up - turn:", turn)
+            if rand2 > 0.4:
+                pg.PAUSE = rand/(speed)
+            elif rand2 > 0.1:
+                pg.PAUSE = rand/(speed/4)
+            else:
+                pg.PAUSE = rand/(speed/10)
+        elif turn >= 40:
+            print("endgame nearing, speed up - turn:", turn)
+            if rand2 > 0.4:
+                pg.PAUSE = rand/(speed)
+            elif rand2 > 0.1:
+                pg.PAUSE = rand/(speed/2)
+            else:
+                pg.PAUSE = rand/(speed/4)
+        else:
+            print("normal happs")
+            if rand2 > 0.5:
+                pg.PAUSE = rand/(speed/2)
+            elif rand2 > 0.2:
+                pg.PAUSE = rand/(speed/5)
+            else:
+                pg.PAUSE = rand/(speed/12)
+
+def make_move_on_screen(move):
+    #get locations to click to make the move
+    char1 = move[0]
+    num1 = int(move[1])
+    char2 = move[2]
+    num2 = int(move[3])
+
+    if is_white:
+        init_x = x1 + square_size//2 + square_size*(ord(char1) - ord('a'))
+        init_y = y2_board - square_size//2 - square_size*(num1 - 1)
+        future_x = x1 + square_size//2 + square_size*(ord(char2) - ord('a'))
+        future_y = y2_board - square_size//2 - square_size*(num2 - 1)
+    else:
+        init_x = x2 - square_size//2 - square_size*(ord(char1) - ord('a'))
+        init_y = y1_board + square_size//2 + square_size*(num1 - 1)
+        future_x = x2 - square_size//2 - square_size*(ord(char2) - ord('a'))
+        future_y = y1_board + square_size//2 + square_size*(num2 - 1)
+
+    #click on init loc
+    pg.moveTo(init_x, init_y)
+    pg.mouseDown(button="left")
+
+    #drag to future loc
+    pg.moveTo(future_x, future_y)
+    pg.mouseUp(button="left")
+
+def premove(move_made):
+    stockfish.make_moves_from_current_position(move_made)
+
+    stockfish.set_elo_rating(2000)
+    enemy_move = stockfish.get_best_move()
+    stockfish.make_moves_from_current_position(enemy_move)
+
+    stockfish.set_elo_rating(elo_rating)
+    premove = stockfish.get_best_move()
+
+    if stockfish.will_move_be_a_capture(premove) == Stockfish.Capture.DIRECT_CAPTURE:
+        pg.PAUSE = 0.01
+        make_move_on_screen(premove)
+
 ########################################################################## MAIN SCRIPT
 foreground = win32gui.GetForegroundWindow()
 win32gui.ShowWindow(foreground, win32con.SW_MAXIMIZE)
@@ -154,22 +254,22 @@ if getattr(sys, 'frozen', False):  # Running as exe
 else:  # Running as script
     project_dir = Path(__file__).parent
 
-set_depth = int(input("Please enter stockfish depth from 1-17: "))
-while set_depth > 17 or set_depth < 1:
-    set_depth = int(input("Please enter stockfish depth from 1-17: "))
+elo_rating = int(input("Set elo rating (recommend 1000): "))
 
-thinking_time = int(input("Please enter min thinking time (ms): "))
+speed = int(input("Speed (lower is slower) (recommend 8 for bullet): "))
 
-speed = int(input("Please enter speed from 1-100: "))
-while speed > 100 or speed < 1:
-    speed = int(input("Please enter speed from 1-100: "))
+depth = int(input("Depth (recommend 4), increase/decrease slowly: "))
+
+do_premoves = input("Premove? y/n: ")
 
 print("\nWaiting for game start...")
 
-stockfish = Stockfish(path = project_dir / "stockfish" / "stockfish-windows-x86-64-avx2.exe", depth=set_depth, parameters={"Threads": 3, "Minimum Thinking Time": thinking_time})
+stockfish = Stockfish(path = project_dir / "stockfish" / "stockfish-windows-x86-64-avx2.exe", parameters={"Threads": 3})
+stockfish.set_elo_rating(elo_rating)
+stockfish.set_depth(depth)
 
-game_end = cv.imread(project_dir / "assets" / "game_end.png", cv.COLOR_RGBA2RGB)
-game_aborted = cv.imread(project_dir / "assets" / "game_aborted.png", cv.COLOR_RGBA2RGB)
+gameend = cv.imread(project_dir / "assets" / "gameend.png", cv.COLOR_RGBA2RGB)
+abort = cv.imread(project_dir / "assets" / "abort.png", cv.COLOR_RGBA2RGB)
 
 piece_paths = [
     project_dir / "assets" / "blackbishop.png",
@@ -186,7 +286,7 @@ piece_paths = [
     project_dir / "assets" / "whitequeen.png",
     project_dir / "assets" / "whiterook.png"
     ]
-
+                    
 #works on 1920x1080 - to change for different resolutions find the pixel of top left of chessboard
 x1 = 231
 y1 = 104
@@ -194,110 +294,124 @@ x2 = 828
 y2 = 832
 w = x2-x1
 h = y2-y1
-t = 5
+t = 3
 square_size = 75
 y1_board = 153
 y2_board = 752
 
+red = (np.uint8(36), np.uint8(31), np.uint8(173))
 toggle = False
+my_timer_colour = None
 is_white = None
+turn = 0
+side_chosen = False
 
 while True:
     screenshot = get_screenshot(x1, y1, w, h)
 
-    cv.imshow("screen", screenshot)
-    if cv.waitKey(1) == ord("q"):
-        cv.destroyAllWindows()
-        break
+    # cv.imshow("screen", screenshot)
+    # if cv.waitKey(1) == ord("q"):
+    #     cv.destroyAllWindows()
+    #     break
     
-    gameendcomp = cv.matchTemplate(game_end, screenshot, cv.TM_CCOEFF_NORMED)
+    gameendcomp = cv.matchTemplate(gameend, screenshot, cv.TM_CCOEFF_NORMED)
     min_val, max_val, min_loc, max_loc = cv.minMaxLoc(gameendcomp)
     if max_val > 0.9:
-        print("Game ended, recheck for side")
-        is_white = None
-
-    gameabortedcomp = cv.matchTemplate(game_aborted, screenshot, cv.TM_CCOEFF_NORMED)
-    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(gameabortedcomp)
-    if max_val > 0.9:
-        print("Game ended, recheck for side")
-        is_white = None
-
-    if is_white is None:
-        #check for colour white on timer to know if you are playing white (and it is your turn)
-        if tuple(screenshot[h-t, w-t]) == (np.uint8(255), np.uint8(255), np.uint8(255)):
-            my_timer_colour = (np.uint8(255), np.uint8(255), np.uint8(255))
-            is_white = True
-            print("Playing white")
-        #check for colour greyish on timer to know if you are playing black (and it is your turn)
-        elif tuple(screenshot[h-t, w-t]) == (np.uint8(33), np.uint8(36), np.uint8(38)):
-            my_timer_colour = (np.uint8(33),np.uint8(36),np.uint8(38))
-            is_white = False
-            print("Playing black")
-    
-    if is_white is None:
+        print("Game ended, just look for timer color")
+        toggle = False
+        turn = 0
         continue
-    
+
+    abortcomp = cv.matchTemplate(abort, screenshot, cv.TM_CCOEFF_NORMED)
+    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(abortcomp)
+    if max_val > 0.9:
+        print("Game ended, just look for timer color")
+        toggle = False
+        turn = 0
+        continue
+
+    if tuple(screenshot[h-t, w-t]) == (np.uint8(255), np.uint8(255), np.uint8(255)):
+        if side_chosen == False:
+            my_timer_colour = (np.uint8(255), np.uint8(255), np.uint8(255))
+            my_off_timer_colour = (np.uint8(149), np.uint8(151), np.uint8(152))
+            is_white = True
+            toggle = False
+            print("Playing white")
+            side_chosen = True
+
+    elif tuple(screenshot[h-t, w-t]) == (np.uint8(33), np.uint8(36), np.uint8(38)):
+        if side_chosen == False:
+            my_timer_colour = (np.uint8(33),np.uint8(36),np.uint8(38))
+            my_off_timer_colour = (np.uint8(37), np.uint8(40), np.uint8(42))
+            is_white = False
+            toggle = False
+            print("Playing black")
+            side_chosen = True
+
+    else:
+        side_chosen = False
+
+    if my_timer_colour is None:
+        continue
+
     ################################ if in game 
 
     piece_locations = []
 
-    if tuple(screenshot[h-t, w-t]) != my_timer_colour:
+    if tuple(screenshot[h-t, w-t]) == my_off_timer_colour:
         if toggle:
             print('Their move, waiting...\n')
-
-        toggle = False
+            print(tuple(screenshot[h-t, w-t]))
+            toggle = False
         
-    elif tuple(screenshot[h-t, w-t]) == my_timer_colour:
+    elif tuple(screenshot[h-t, w-t]) == my_timer_colour or tuple(screenshot[h-t, w-t]) == red:
         if not toggle:
             print('My move!')
+            print(tuple(screenshot[h-t, w-t]))
 
         #1. RECORD BOARD POSITION
             fen = make_fen()
             
             #edit fen for turn
             if is_white:
-                fen += ' w'
+                fen += ' w '
+                
             else:
-                fen += ' b'
+                fen += ' b '
             
-            stockfish.set_fen_position(fen)
-            print(fen)
-            print('Position after their move', stockfish.get_board_visual())
+            if stockfish.get_what_is_on_square('e1') == Stockfish.Piece.WHITE_KING and stockfish.get_what_is_on_square('h1') == Stockfish.Piece.WHITE_ROOK:
+                fen += 'K'
+            
+            if stockfish.get_what_is_on_square('e1') == Stockfish.Piece.WHITE_KING and stockfish.get_what_is_on_square('a1') == Stockfish.Piece.WHITE_ROOK:
+                fen += 'Q'
+            
+            if stockfish.get_what_is_on_square('e8') == Stockfish.Piece.BLACK_KING and stockfish.get_what_is_on_square('h8') == Stockfish.Piece.WHITE_ROOK:
+                fen += 'k'
+            
+            if stockfish.get_what_is_on_square('e8') == Stockfish.Piece.BLACK_KING and stockfish.get_what_is_on_square('a8') == Stockfish.Piece.WHITE_ROOK:
+                fen += 'q'
+
+            if is_fen_valid(fen):
+                stockfish.set_fen_position(fen)
+            else:
+                print("fen not valid")
+                continue
 
         #2. MAKE MY MOVE
-            move_to_make = stockfish.get_best_move()     
+            move_to_make = stockfish.get_best_move()
             
-            #get locations to click to make the move
-            char1 = move_to_make[0]
-            num1 = int(move_to_make[1])
-            char2 = move_to_make[2]
-            num2 = int(move_to_make[3])
+            set_pause(turn, speed)
 
-            if is_white:
-                init_x = x1 + square_size//2 + square_size*(ord(char1) - ord('a'))
-                init_y = y2_board - square_size//2 - square_size*(num1 - 1)
-                future_x = x1 + square_size//2 + square_size*(ord(char2) - ord('a'))
-                future_y = y2_board - square_size//2 - square_size*(num2 - 1)
-            else:
-                init_x = x2 - square_size//2 - square_size*(ord(char1) - ord('a'))
-                init_y = y1_board + square_size//2 + square_size*(num1 - 1)
-                future_x = x2 - square_size//2 - square_size*(ord(char2) - ord('a'))
-                future_y = y1_board + square_size//2 + square_size*(num2 - 1)
+            make_move_on_screen(move_to_make)
 
-            #random move time from 0 to 1 sec
-            rand = random.random()
-            pg.PAUSE = rand/(speed)
-
-            #click on init loc
-            pg.moveTo(init_x, init_y)
-            pg.mouseDown(button="left")
-
-            #drag to future loc
-            pg.moveTo(future_x, future_y)
-            pg.mouseUp(button="left")
-
+            #premove captures
+            if do_premoves == 'y':
+                premove(move_to_make)
+                turn += 1
+            
             #make move on stockfish
-            stockfish.make_moves_from_current_position([move_to_make])
-            print("Position after my move", move_to_make, stockfish.get_board_visual())
+            print("Made move", move_to_make, "based on", fen)
 
-        toggle = True
+            turn += 1
+
+            toggle = True
